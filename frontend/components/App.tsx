@@ -140,6 +140,7 @@ export default function App() {
   const [formError, setFormError] = useState("");
   const [source, setSource] = useState("");
   const [bar, setBar] = useState(6);
+  const [replay, setReplay] = useState(false);
   const abort = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -167,6 +168,7 @@ export default function App() {
             started = true;
             dispatch({ type: "reset" });
             setSource(label);
+            setReplay(false);
             setActive(true);
             window.scrollTo({ top: 0 });
           }
@@ -197,6 +199,7 @@ export default function App() {
     setSource(
       page && page.type === "page" ? page.value.domain || "Example" : "Example",
     );
+    setReplay(true);
     setActive(true);
     setBusy(true);
     window.scrollTo({ top: 0 });
@@ -383,6 +386,13 @@ export default function App() {
                       </button>
                     </div>
                   )}
+                </div>
+              )}
+              {replay && (
+                <div className="notice">
+                  A saved run on {source}&apos;s public home page, replayed. All
+                  the copy and the buyers are the agent&apos;s; nothing here
+                  comes from {source} itself.
                 </div>
               )}
               {run.warning && <div className="notice">{run.warning}</div>}
