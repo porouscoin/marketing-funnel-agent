@@ -110,9 +110,12 @@ def problems(piece_id: str, piece: dict) -> list[str]:
 
 
 def trim(text: str, limit: int) -> str:
-    """Cut at a word boundary so nothing ends mid-word."""
+    """Cut at a sentence end if one is close enough, else at a word, so nothing ends mid-word."""
     if len(text) <= limit:
         return text
+    sentence = max(text.rfind(". ", 0, limit), text.rfind("? ", 0, limit))
+    if sentence >= limit * 0.5:
+        return text[: sentence + 1]
     cut = text[: limit + 1].rsplit(" ", 1)[0] if " " in text[:limit] else text[:limit]
     return cut[:limit].rstrip(" ,;:-–—")
 

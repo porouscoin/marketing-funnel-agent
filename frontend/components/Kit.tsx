@@ -164,7 +164,10 @@ function PieceRow({
   const draft = run.drafts?.[id];
   if (!draft) return null;
   const shown: "draft" | "rewrite" =
-    version ?? (rewrite && run.scores[2]?.[id] ? "rewrite" : "draft");
+    version ??
+    ((run.scores[2]?.[id]?.avg ?? -1) >= (run.scores[1]?.[id]?.avg ?? 0)
+      ? "rewrite"
+      : "draft");
   const base = shown === "rewrite" && rewrite ? rewrite : draft;
   const piece = edit?.piece ?? base;
   const buyers = run.panel || [];

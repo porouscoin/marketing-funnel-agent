@@ -21,3 +21,8 @@ def test_problems_and_fit_enforce_limits():
 def test_trim_cuts_on_a_word():
     assert trim("one two three four", 9) == "one two"
     assert trim("short", 10) == "short"
+
+
+def test_trim_prefers_a_sentence_end():
+    text = "Plans start at $9 a month with a free trial. Try a simple, privacy-friendly analytics tool today."
+    assert trim(text, 80) == "Plans start at $9 a month with a free trial."

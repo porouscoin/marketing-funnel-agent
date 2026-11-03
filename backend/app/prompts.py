@@ -49,8 +49,9 @@ Rules:
 - The angle must be backed by the evidence quote. If the page backs nothing distinctive, pick the most defensible angle and still quote the page."""
 
 PANEL = """You are building a test panel of 5 synthetic buyers for a product's marketing.
-They must be realistic people who could plausibly see this product's ads, and clearly different from each other:
-different roles, budgets and attitudes. Include at least one sceptic and one person who is only a partial fit.
+They must be realistic people this product could genuinely serve, who would plausibly see its ads, and clearly
+different from each other: different roles, company sizes, budgets and reasons to buy. Make one of them a sceptic
+who needs proof. Base them on the audience the page itself targets.
 Answer with one JSON object:
 {"buyers": [{
   "name": "a first name",
@@ -66,9 +67,10 @@ DRAFTS = f"""You are a senior performance copywriter writing a launch kit for on
 Write these seven pieces:
 {spec_text()}
 Rules:
-- "angle" says in a few words which angle the piece uses. Use the gap angle in at least three pieces and vary the rest.
+- "angle" says in 2 to 5 plain words which angle the piece uses (for example "no cookie banner", "price vs GA4"). Use the gap angle in at least three pieces and vary the rest.
+- Be concrete. Use the page's specific facts: numbers, named customers, how it works, what it replaces, the price. A specific claim beats a general one every time.
 - Write for the buyers on the panel. Each piece should give at least one of them a reason to click.
-- Plain, specific language. No emojis, no hashtags, no exclamation marks, no clichés like "revolutionize", "unlock", "supercharge", "game-changer", "seamless".
+- Plain language. No emojis, no hashtags, no exclamation marks. No clichés like "revolutionize", "unlock", "supercharge", "game-changer", "seamless", "tired of", "say goodbye", "ditch", "look no further".
 - Respect every character limit. Count carefully.
 - Emails are a sequence: 1 introduces the problem and the product, 2 answers the most likely doubt with proof from the page, 3 makes the offer and asks for the action. Sign each email off as "The <product> team".
 Answer with one JSON object with the keys meta, google, linkedin, hero, email1, email2, email3."""
@@ -83,7 +85,10 @@ How you read ads: {b['style']}.
 
 You are seeing marketing for {product}. React honestly, as yourself, the way you would while scrolling or reading your inbox.
 Most ads don't earn a click. Don't be polite and don't grade like a teacher; react like a busy buyer.
-Score 1 to 10: 1 means you'd scroll past or delete it, 10 means you'd act on it right now.
+Score 1 to 10 on this scale:
+1-2 you'd scroll past or delete it without reading. 3-4 you noticed it but it says nothing to you.
+5 you read it but wouldn't act. 6 mildly interested. 7 you'd click to find out more. 8-9 you'd sign up or reply. 10 you'd act right now.
+"click" is true when your score is 7 or more.
 Answer with one JSON object:
 {{"reactions": [{{"piece": "the piece id", "click": true or false, "score": 1-10, "objection": "one sentence in your own voice: what stops you, or what would push you over the line", "reason": "at most 12 words: why that score"}}]}}
 Give exactly one reaction per piece, using the piece ids you are shown."""
@@ -91,9 +96,12 @@ Give exactly one reaction per piece, using the piece ids you are shown."""
 
 REWRITE = f"""You are a senior copywriter fixing pieces of a launch kit that a test panel of buyers scored low.
 {HONEST}
-For each piece you are given: its current version and every buyer's reaction.
-Rewrite it so it answers the objection most buyers share, using a fact from the product page.
-If the page has no fact that answers that objection, make the most honest improvement you can and don't pretend.
+For each piece you are given: its current version and every buyer's reaction, lowest score first.
+For EACH piece separately:
+- Find the objection that most of the low scorers share for that piece. Different pieces usually have different problems.
+- Answer it with a specific fact from the product page (a number, a named customer, how it works, the price).
+- Keep what the high scorers liked. Change the copy substantially; don't just bolt a sentence on.
+- If the page has no fact that answers the objection, make the most honest improvement you can and don't pretend.
 Keep the same fields and limits:
 {spec_text()}
 Same style rules: plain and specific, no emojis, no exclamation marks, no clichés.

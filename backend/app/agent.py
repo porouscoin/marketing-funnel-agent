@@ -244,41 +244,53 @@ def clean_panel(raw: dict) -> list[dict]:
 # ---------- 4. drafts ----------
 
 
-async def write_drafts(brief: dict, market: dict | None, buyers: list[dict], usage: Usage) -> tuple[dict, int]:
-    writer = models(settings.writer_models)
+def _context(brief: dict, market: dict | None, page: Page, buyers: list[dict] | None = None) -> str:
+    """What the writer sees: the brief, the page itself (for facts), the gap and the panel."""
     gap = market["gap"] if market else None
-    context = (
-        f"# PRODUCT BRIEF\n{prompts.dump(brief)}\n\n"
-        + (f"# THE GAP\n{prompts.dump(gap)}\n\n" if gap and gap["angle"] else "")
-        + "# THE PANEL\n"
-        + "\n".join(f"- {b['name']}, {b['role']}. Cares about {b['cares']}. Doubt: {b['doubt']}" for b in buyers)
-    )
-    raw, _ = await ask_json("drafts", writer, prompts.DRAFTS, context, usage, max_tokens=3000, temperature=0.8)
-    drafts = clean(raw)
-    broken = {p: drafts[p] for p in PIECE_IDS if problems(p, drafts[p])}
+    out = f"# PRODUCT BRIEF\n{prompts.dump(brief)}\n\n# THE PRODUCT PAGE (the only source of facts)\n{page.for_prompt(4500)}\n\n"
+    if gap and gap["angle"]:
+        out += f"# THE GAP (the angle no competitor owns)\n{prompts.dump(gap)}\n\n"
+    else:
+        out += "# THE GAP\nNo competitor research is available. Pick angles from what is distinctive on the page.\n\n"
+    if buyers:
+        out += "# THE PANEL\n" + "\n".join(f"- {b['name']}, {b['role']}. Cares about {b['cares']}. Doubt: {b['doubt']}" for b in buyers)
+    return out
+
+
+async def enforce(pieces: dict[str, dict], usage: Usage) -> tuple[dict[str, dict], int]:
+    """Length and format rules: one fix-up call for whatever breaks them, then a hard trim."""
+    broken = {p: pieces[p] for p in pieces if problems(p, pieces[p])}
     fixed = 0
     if broken:
         issues = [x for p in broken for x in problems(p, broken[p])]
         try:
             raw_fix, _ = await ask_json(
                 "shorten",
-                writer,
+                models(settings.writer_models),
                 prompts.SHORTEN,
-                f"Problems:\n" + "\n".join(f"- {x}" for x in issues) + f"\n\nPieces:\n{prompts.dump(broken)}",
+                "Problems:\n" + "\n".join(f"- {x}" for x in issues) + f"\n\nPieces:\n{prompts.dump(broken)}",
                 usage,
                 max_tokens=1500,
                 temperature=0.3,
             )
             for p in broken:
                 if isinstance(raw_fix.get(p), dict):
-                    candidate = clean_piece(p, {**drafts[p], **raw_fix[p]})
-                    if len(problems(p, candidate)) < len(problems(p, drafts[p])):
-                        drafts[p] = candidate
+                    candidate = clean_piece(p, {**pieces[p], **raw_fix[p]})
+                    candidate.update({k: v for k, v in pieces[p].items() if k == "addresses"})
+                    if len(problems(p, candidate)) < len(problems(p, pieces[p])):
+                        pieces = {**pieces, p: candidate}
                         fixed += 1
         except ProviderError:
             pass
     # Whatever the model couldn't fix, code enforces.
-    return {p: fit(p, drafts[p]) for p in PIECE_IDS}, fixed
+    return {p: {**fit(p, v), **({"addresses": v["addresses"]} if "addresses" in v else {})} for p, v in pieces.items()}, fixed
+
+
+async def write_drafts(brief: dict, market: dict | None, page: Page, buyers: list[dict], usage: Usage) -> tuple[dict, int]:
+    raw, _ = await ask_json(
+        "drafts", models(settings.writer_models), prompts.DRAFTS, _context(brief, market, page, buyers), usage, max_tokens=3500, temperature=0.8
+    )
+    return await enforce(clean(raw), usage)
 
 
 # ---------- 5. the panel reacts ----------
@@ -314,17 +326,20 @@ async def react(buyer: dict, brief: dict, pieces: dict[str, dict], usage: Usage)
     specs = models(settings.buyer_models)
     # The buyer's own model first; the others are fallbacks when it's rate limited.
     specs.sort(key=lambda s: s.id != buyer.get("model"))
-    shown = "\n\n".join(f"Piece id: {p}\n{as_text(p, piece)}" for p, piece in pieces.items())
-    raw, _ = await ask_json(
-        "buyer",
-        specs,
-        prompts.buyer_system(buyer, brief["product"]),
-        shown,
-        usage,
-        max_tokens=1600,
-        temperature=0.9,
-    )
-    return clean_reactions(raw, list(pieces))
+    out: list[dict] = []
+    todo = dict(pieces)
+    # Models sometimes stop after a few pieces; ask once more for the ones they skipped.
+    for _ in range(2):
+        shown = "\n\n".join(f"Piece id: {p}\n{as_text(p, piece)}" for p, piece in todo.items())
+        raw, _ = await ask_json(
+            "buyer", specs, prompts.buyer_system(buyer, brief["product"]), shown, usage, max_tokens=2000, temperature=0.7
+        )
+        out += clean_reactions(raw, list(todo))
+        done = {r["piece"] for r in out}
+        todo = {p: v for p, v in pieces.items() if p not in done}
+        if not todo:
+            break
+    return sorted(out, key=lambda r: list(pieces).index(r["piece"]))
 
 
 async def panel_round(round: int, buyers: list[dict], brief: dict, pieces: dict[str, dict], usage: Usage) -> AsyncIterator[dict]:
@@ -358,33 +373,38 @@ def score(reactions: dict[str, list[dict]], pieces: list[str]) -> dict[str, dict
 # ---------- 6. rewrites ----------
 
 
-async def rewrite(low: list[str], brief: dict, market: dict | None, drafts: dict, reactions: dict, buyers: list[dict], usage: Usage) -> dict:
-    names = {b["id"]: b["name"] for b in buyers}
+async def rewrite(
+    low: list[str], brief: dict, market: dict | None, page: Page, drafts: dict, reactions: dict, buyers: list[dict], usage: Usage
+) -> dict:
+    who = {b["id"]: b for b in buyers}
     parts = []
     for p in low:
-        said = [f"- {names[bid]}: score {r['score']}, {'would click' if r['click'] else 'no click'}. {r['objection']}" for bid, rs in reactions.items() for r in rs if r["piece"] == p]
-        parts.append(f"## {p} ({LABELS[p]})\nCurrent version:\n{prompts.dump(drafts[p])}\nReactions:\n" + "\n".join(said))
-    gap = market["gap"] if market else None
+        rows = sorted(
+            ((who[bid], r) for bid, rs in reactions.items() for r in rs if r["piece"] == p), key=lambda x: x[1]["score"]
+        )
+        said = [
+            f"- {b['name']} ({b['role']}): {r['score']}/10, {'would click' if r['click'] else 'no click'}. \"{r['objection']}\""
+            for b, r in rows
+        ]
+        parts.append(f"## {p} ({LABELS[p]})\nCurrent version:\n{prompts.dump(drafts[p])}\nWhat the panel said, lowest score first:\n" + "\n".join(said))
     raw, _ = await ask_json(
         "rewrite",
         models(settings.writer_models),
         prompts.REWRITE,
-        f"# PRODUCT BRIEF\n{prompts.dump(brief)}\n\n"
-        + (f"# THE GAP\n{prompts.dump(gap)}\n\n" if gap and gap["angle"] else "")
-        + "# PIECES TO FIX\n\n"
-        + "\n\n".join(parts),
+        _context(brief, market, page) + "\n\n# PIECES TO FIX\n\n" + "\n\n".join(parts),
         usage,
-        max_tokens=2500,
+        max_tokens=3500,
         temperature=0.7,
     )
     rows = raw.get("rewrites") if isinstance(raw.get("rewrites"), dict) else {}
     out = {}
     for p in low:
         if isinstance(rows.get(p), dict):
-            piece = fit(p, clean_piece(p, {**drafts[p], **rows[p]}))
+            piece = clean_piece(p, {**drafts[p], **rows[p]})
             piece["addresses"] = _s(rows[p].get("addresses"), 160)
             out[p] = piece
-    return out
+    fixed, _ = await enforce(out, usage)
+    return fixed
 
 
 # ---------- the whole run ----------
@@ -458,7 +478,7 @@ async def _steps(url: str | None, text: str | None, usage: Usage) -> AsyncIterat
 
         # 4. Drafts.
         yield step("drafts", "running", "Writing 3 ads, a landing hero and 3 emails")
-        drafts, fixed = await write_drafts(brief, market, buyers, usage)
+        drafts, fixed = await write_drafts(brief, market, page, buyers, usage)
         yield {"type": "drafts", "value": drafts}
         yield step("drafts", "done", "Wrote the drafts", f"Length limits checked in code{f', {fixed} fixed' if fixed else ''}")
 
@@ -486,7 +506,7 @@ async def _steps(url: str | None, text: str | None, usage: Usage) -> AsyncIterat
         # 6. Rewrite what fell below the bar, then test it again.
         if low:
             yield step("rewrite", "running", f"Rewriting {len(low)} pieces to answer the objections", ", ".join(LABELS[p] for p in low))
-            rewrites = await rewrite(low, brief, market, drafts, reactions, buyers, usage)
+            rewrites = await rewrite(low, brief, market, page, drafts, reactions, buyers, usage)
             yield {"type": "rewrites", "value": rewrites}
             yield step("rewrite", "done", "Rewrote the weak pieces", ", ".join(LABELS[p] for p in rewrites))
             if rewrites:
